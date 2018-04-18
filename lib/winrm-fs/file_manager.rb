@@ -61,20 +61,27 @@ module WinRM
       # @param [String] The full path to write the file to locally
       def download(remote_path, local_path, first = true, chunk_size = 1024 * 1024, index = 0)
         @logger.info("downloading: #{remote_path} -> #{local_path}")
+        script = WinRM::FS::Scripts.render('download', path: remote_path, chunk_size: chunk_size, index: index)
+        output = @connection.shell(:powershell) { |e| e.run(script) }
+        if (output.exitcode == 2)
+          return download_dir(remote_path, local_path, first)
+        elsif (output.exitcode >= 1)
+          return false
+        end
         File.open(local_path, 'wb') do |fd|
+          contents = output.stdout.gsub('\n\r', '')
+          out = Base64.decode64(contents)
+          fd.write(out)
+          index += out.length
           while true do
-              script = WinRM::FS::Scripts.render('download', path: remote_path, chunk_size: chunk_size, index: index)
-              output = @connection.shell(:powershell) { |e| e.run(script) }
-              if (output.exitcode == 1)
-                return false
-              elsif (output.exitcode == 2)
-                return download_dir(remote_path, local_path, first)
-              end
-              contents = output.stdout.gsub('\n\r', '')
-              out = Base64.decode64(contents)
-              return true if out.length == 0
-              index += out.length
-              fd.write(out)
+            script = WinRM::FS::Scripts.render('download', path: remote_path, chunk_size: chunk_size, index: index)
+            output = @connection.shell(:powershell) { |e| e.run(script) }
+            return false if output.exitcode >= 1
+            contents = output.stdout.gsub('\n\r', '')
+            out = Base64.decode64(contents)
+            return true if out.length == 0
+            fd.write(out)
+            index += out.length
           end
         end
         true
